@@ -343,6 +343,61 @@ def _map_match(
     }
 
 
+def _summary_to_partial_match(
+    summary: dict,
+    tournaments_map: dict,
+    team_name: str,
+    birth_ts: int | None,
+) -> dict:
+    timestamp = int(summary["timestamp"])
+    tournament = tournaments_map.get(str(summary["uniqueTournamentId"]), {})
+    is_national = _is_national_tournament(tournament)
+    team = "France" if is_national else team_name
+    season_year = datetime.fromtimestamp(timestamp, tz=timezone.utc).year
+
+    age = ""
+    if birth_ts:
+        age = str(max(0, (timestamp - int(birth_ts)) // (365 * 24 * 3600)))
+
+    return {
+        "opponent": "",
+        "goals": "",
+        "competition": tournament.get("name") or "",
+        "date": datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
+        "team": team,
+        "minutesPlayed": "",
+        "assists": "",
+        "result": "",
+        "season": str(season_year),
+        "field": "",
+        "age": age,
+        "score": "",
+        "videoId": "",
+        "isFinal": "false",
+        "timestamp": timestamp,
+        "rating": float(summary["value"]) if summary.get("value") is not None else None,
+        "goalIncidents": [],
+        "assistIncidents": [],
+    }
+
+
+def _finalize_career_matches(
+    matches: list[dict],
+    goals: list[dict],
+    assists: list[dict],
+    birth_ts: int | None,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    matches.sort(key=lambda match: match["timestamp"])
+    for index, match in enumerate(matches, start=1):
+        match["matchNumber"] = str(index)
+        match.pop("timestamp", None)
+        match.pop("rating", None)
+        match.pop("goalIncidents", None)
+        match.pop("assistIncidents", None)
+
+    return matches, goals, assists
+
+
 def get_player_career(
     player_id: int,
     slug: str | None = None,
@@ -353,33 +408,50 @@ def get_player_career(
     country = player.get("country") or {}
     team = player.get("team") or {}
     birth_ts = player.get("dateOfBirthTimestamp")
-    played_ts = _played_timestamps(page_props)
-    mbappe_events = _collect_mbappe_events(player_id, slug)[:limit]
+    tournaments_map = page_props.get("uniqueTournamentsMap") or {}
+    team_name = team.get("name") or "Real Madrid"
+
+    summary_events = sorted(
+        [
+            event
+            for event in page_props.get("lastYearSummary", [])
+            if event.get("type") == "event"
+        ],
+        key=lambda event: event["timestamp"],
+    )[-limit:]
+
+    events_by_timestamp = {
+        int(event["startTimestamp"]): event for event in _collect_mbappe_events(player_id, slug)
+    }
 
     matches = []
     goals = []
     assists = []
 
-    for event in mbappe_events:
-        match_props = _fetch_match_details(event)
-        event = match_props.get("event") or event
-        mapped = _map_match(
-            event,
-            match_props.get("lineups"),
-            match_props.get("incidents"),
-            player_id,
-            played_ts,
-        )
+    for summary in summary_events:
+        timestamp = int(summary["timestamp"])
+        full_event = events_by_timestamp.get(timestamp)
+        mapped = None
+
+        if full_event:
+            match_props = _fetch_match_details(full_event)
+            mapped = _map_match(
+                match_props.get("event") or full_event,
+                match_props.get("lineups"),
+                match_props.get("incidents"),
+                player_id,
+                {timestamp},
+            )
+
         if not mapped:
-            continue
+            mapped = _summary_to_partial_match(summary, tournaments_map, team_name, birth_ts)
 
         matches.append(mapped)
 
-        for index, incident in enumerate(mapped.pop("goalIncidents"), start=1):
-            assist_name = (incident.get("assist1") or {}).get("name") or ""
+        for incident in mapped.get("goalIncidents") or []:
             goals.append(
                 {
-                    "assistPlayer": assist_name,
+                    "assistPlayer": (incident.get("assist1") or {}).get("name") or "",
                     "competition": mapped["competition"],
                     "date": mapped["date"],
                     "distance": "",
@@ -394,8 +466,7 @@ def get_player_career(
                 }
             )
 
-        for incident in mapped.pop("assistIncidents"):
-            scorer_name = (incident.get("player") or {}).get("name") or ""
+        for incident in mapped.get("assistIncidents") or []:
             assists.append(
                 {
                     "competition": mapped["competition"],
@@ -406,23 +477,14 @@ def get_player_career(
                     "number": str(len(assists) + 1),
                     "opponent": mapped["opponent"],
                     "shootPart": "",
-                    "scorer": scorer_name,
+                    "scorer": (incident.get("player") or {}).get("name") or "",
                     "team": mapped["team"],
                     "xG": "",
                     "xGa": "",
                 }
             )
 
-    matches.sort(key=lambda match: match["timestamp"])
-    for index, match in enumerate(matches, start=1):
-        match["matchNumber"] = str(index)
-        if birth_ts:
-            age_seconds = match["timestamp"] - int(birth_ts)
-            match["age"] = str(max(0, age_seconds // (365 * 24 * 3600)))
-        else:
-            match["age"] = ""
-        match.pop("timestamp", None)
-        match.pop("rating", None)
+    matches, goals, assists = _finalize_career_matches(matches, goals, assists, birth_ts)
 
     total_goals = sum(int(match["goals"]) for match in matches if match["goals"].isdigit())
     total_assists = sum(int(match["assists"]) for match in matches if match["assists"].isdigit())
