@@ -4,6 +4,8 @@ from flask_cors import CORS
 from scraper import (
     ScraperError,
     fetch_api,
+    get_event,
+    get_event_incidents,
     get_player_career,
     get_player_last_match,
     get_player_last_match_full,
@@ -85,6 +87,16 @@ def player_recent_matches(player_id: int):
 def player_career(player_id: int):
     limit = min(request.args.get("limit", 100, type=int), 200)
     return jsonify(get_player_career(player_id, _player_slug(), limit=limit))
+
+
+@app.get("/event/<int:event_id>/incidents")
+def event_incidents(event_id: int):
+    return jsonify(get_event_incidents(event_id))
+
+
+@app.get("/event/<int:event_id>")
+def event(event_id: int):
+    return jsonify(get_event(event_id))
 
 
 @app.get("/proxy")

@@ -642,3 +642,11 @@ def fetch_api(path: str) -> dict:
         )
 
     return response.json()
+
+
+def get_event(event_id: int) -> dict:
+    return fetch_api(f"/event/{event_id}")
+
+
+def get_event_incidents(event_id: int) -> dict:
+    return fetch_api(f"/event/{event_id}/incidents")
