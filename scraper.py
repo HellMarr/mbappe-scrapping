@@ -537,6 +537,88 @@ def get_player_profile(player_id: int, slug: str | None = None) -> dict:
     }
 
 
+def _find_event_by_timestamp(player_id: int, slug: str | None, timestamp: int) -> dict | None:
+    for event in _collect_mbappe_events(player_id, slug):
+        if int(event.get("startTimestamp", 0)) == timestamp:
+            return event
+
+    pages = [
+        f"https://www.sofascore.com/football/player/{slug or 'x'}/{player_id}",
+    ]
+    for team_slug, team_id in TEAM_PAGES:
+        pages.append(f"https://www.sofascore.com/football/team/{team_slug}/{team_id}")
+
+    seen_links: set[tuple[str, str]] = set()
+    for page_url in pages:
+        links = MATCH_LINK_PATTERN.findall(fetch_html(page_url))
+        for slug_part, custom_id, _event_id in links:
+            key = (slug_part, custom_id)
+            if key in seen_links:
+                continue
+            seen_links.add(key)
+            try:
+                props = fetch_match_page_props(slug_part, custom_id)
+                event = props.get("event") or {}
+                if int(event.get("startTimestamp", 0)) == timestamp:
+                    return event
+            except ScraperError:
+                continue
+
+    if PROXY:
+        try:
+            payload = fetch_api(f"/player/{player_id}/events/last/0")
+            for item in payload.get("events", []):
+                event = item.get("event") or item
+                if int(event.get("startTimestamp", 0)) == timestamp:
+                    return event
+        except ScraperError:
+            pass
+
+    return None
+
+
+def _fetch_incidents(event_id: int) -> list[dict]:
+    if PROXY:
+        try:
+            payload = fetch_api(f"/event/{event_id}/incidents")
+            return payload.get("incidents", [])
+        except ScraperError:
+            pass
+    return []
+
+
+def get_player_last_match_full(
+    player_id: int,
+    slug: str | None = None,
+    context: str | None = None,
+) -> dict:
+    summary = get_player_last_match(player_id=player_id, slug=slug, context=context)
+    timestamp = int(summary["timestamp"])
+    event = _find_event_by_timestamp(player_id, slug, timestamp)
+
+    incidents: list[dict] = []
+    player_stats: dict | None = None
+
+    if event:
+        event_id = int(event["id"])
+        match_props = _fetch_match_details(event)
+        event = match_props.get("event") or event
+        incidents = match_props.get("incidents") or _fetch_incidents(event_id)
+        lineup = _player_in_lineups(match_props.get("lineups"), player_id)
+        if lineup:
+            player_stats = lineup.get("statistics")
+
+    return {
+        "playerId": player_id,
+        "context": context or "all",
+        **summary,
+        "event": event,
+        "incidents": incidents,
+        "playerStats": player_stats,
+        "source": "proxy" if PROXY else "html",
+    }
+
+
 def fetch_api(path: str) -> dict:
     if not path.startswith("/"):
         path = f"/{path}"

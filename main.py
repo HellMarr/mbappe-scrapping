@@ -6,6 +6,7 @@ from scraper import (
     fetch_api,
     get_player_career,
     get_player_last_match,
+    get_player_last_match_full,
     get_player_profile,
     get_player_recent_matches,
 )
@@ -56,6 +57,16 @@ def player_last_match(player_id: int):
         context=_match_context(),
     )
     return jsonify({"playerId": player_id, **match, "source": "html"})
+
+
+@app.get("/player/<int:player_id>/last-match/full")
+def player_last_match_full(player_id: int):
+    match = get_player_last_match_full(
+        player_id=player_id,
+        slug=_player_slug(),
+        context=_match_context(),
+    )
+    return jsonify(match)
 
 
 @app.get("/player/<int:player_id>/recent-matches")
