@@ -209,13 +209,16 @@ def _player_in_lineups(lineups: dict | None, player_id: int) -> dict | None:
     return None
 
 
-def _extract_event_ids_from_json(data: dict) -> set[int]:
-    event_ids: set[int] = set()
+def _extract_mbappe_events_from_json(data: dict) -> dict[int, dict]:
+    events: dict[int, dict] = {}
 
     def walk(obj):
         if isinstance(obj, dict):
             if {"homeTeam", "awayTeam", "startTimestamp", "id"} <= set(obj.keys()):
-                event_ids.add(int(obj["id"]))
+                home_id = (obj.get("homeTeam") or {}).get("id")
+                away_id = (obj.get("awayTeam") or {}).get("id")
+                if home_id in MBAPPE_TEAM_IDS or away_id in MBAPPE_TEAM_IDS:
+                    events[int(obj["id"])] = obj
             for value in obj.values():
                 walk(value)
         elif isinstance(obj, list):
@@ -223,30 +226,58 @@ def _extract_event_ids_from_json(data: dict) -> set[int]:
                 walk(value)
 
     walk(data)
-    return event_ids
+    return events
 
 
-def _collect_event_ids(player_id: int, slug: str | None) -> list[int]:
+def _collect_mbappe_events(player_id: int, slug: str | None) -> list[dict]:
     player_html = fetch_html(
         f"https://www.sofascore.com/football/player/{slug or 'x'}/{player_id}"
     )
-    event_ids = {int(event_id) for _, _, event_id in MATCH_LINK_PATTERN.findall(player_html)}
-
     player_json = json.loads(JSON_SCRIPT_PATTERN.findall(player_html)[0])
-    event_ids.update(_extract_event_ids_from_json(player_json))
+    events = _extract_mbappe_events_from_json(player_json)
 
-    for team_slug, team_id in TEAM_PAGES:
+    for team_slug, _team_id in TEAM_PAGES:
         team_html = fetch_html(
-            f"https://www.sofascore.com/football/team/{team_slug}/{team_id}"
+            f"https://www.sofascore.com/football/team/{team_slug}/{_team_id}"
         )
-        event_ids.update(
-            _extract_event_ids_from_json(json.loads(JSON_SCRIPT_PATTERN.findall(team_html)[0]))
-        )
+        team_json = json.loads(JSON_SCRIPT_PATTERN.findall(team_html)[0])
+        events.update(_extract_mbappe_events_from_json(team_json))
 
-    return sorted(event_ids, reverse=True)
+    return sorted(events.values(), key=lambda event: event["startTimestamp"], reverse=True)
 
 
-def _map_match(event: dict, lineups: dict | None, incidents: list[dict], player_id: int) -> dict | None:
+def _played_timestamps(page_props: dict) -> set[int]:
+    return {
+        int(event["timestamp"])
+        for event in page_props.get("lastYearSummary", [])
+        if event.get("type") == "event"
+    }
+
+
+def _fetch_match_details(event: dict) -> dict:
+    slug = event.get("slug")
+    custom_id = event.get("customId")
+    if slug and custom_id:
+        return fetch_match_page_props(slug, custom_id)
+
+    event_id = event.get("id")
+    if event_id:
+        event_html = fetch_html(f"https://www.sofascore.com/event/{event_id}")
+        links = MATCH_LINK_PATTERN.findall(event_html)
+        if links:
+            slug_part, custom_id_part, _ = links[0]
+            return fetch_match_page_props(slug_part, custom_id_part)
+
+    return {"event": event, "incidents": [], "lineups": None}
+
+
+def _map_match(
+    event: dict,
+    lineups: dict | None,
+    incidents: list[dict],
+    player_id: int,
+    played_timestamps: set[int] | None = None,
+) -> dict | None:
     player_team_id = _player_team_id(event, player_id)
     if not player_team_id:
         return None
@@ -274,7 +305,9 @@ def _map_match(event: dict, lineups: dict | None, incidents: list[dict], player_
             assist_incidents.append(incident)
 
     if not lineup and goals == 0 and assists == 0:
-        return None
+        timestamp = int(event.get("startTimestamp") or 0)
+        if not played_timestamps or timestamp not in played_timestamps:
+            return None
 
     home_score = _score_value(event.get("homeScore"), "current") or 0
     away_score = _score_value(event.get("awayScore"), "current") or 0
@@ -320,29 +353,22 @@ def get_player_career(
     country = player.get("country") or {}
     team = player.get("team") or {}
     birth_ts = player.get("dateOfBirthTimestamp")
+    played_ts = _played_timestamps(page_props)
+    mbappe_events = _collect_mbappe_events(player_id, slug)[:limit]
 
-    event_ids = _collect_event_ids(player_id, slug)[: max(limit * 3, limit)]
     matches = []
     goals = []
     assists = []
 
-    for event_id in event_ids:
-        if len(matches) >= limit:
-            break
-
-        match_html = fetch_html(f"https://www.sofascore.com/event/{event_id}")
-        match_links = MATCH_LINK_PATTERN.findall(match_html)
-        if not match_links:
-            continue
-
-        slug_part, custom_id, _ = match_links[0]
-        match_props = fetch_match_page_props(slug_part, custom_id)
-        event = match_props.get("event") or {}
+    for event in mbappe_events:
+        match_props = _fetch_match_details(event)
+        event = match_props.get("event") or event
         mapped = _map_match(
             event,
             match_props.get("lineups"),
             match_props.get("incidents"),
             player_id,
+            played_ts,
         )
         if not mapped:
             continue
