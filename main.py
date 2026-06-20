@@ -6,6 +6,7 @@ from scraper import (
     fetch_api,
     get_event,
     get_event_incidents,
+    get_team_last_events,
     get_player_career,
     get_player_last_match,
     get_player_last_match_full,
@@ -87,6 +88,11 @@ def player_recent_matches(player_id: int):
 def player_career(player_id: int):
     limit = min(request.args.get("limit", 100, type=int), 200)
     return jsonify(get_player_career(player_id, _player_slug(), limit=limit))
+
+
+@app.get("/team/<int:team_id>/events/last/<int:page>")
+def team_last_events(team_id: int, page: int):
+    return jsonify(get_team_last_events(team_id, page))
 
 
 @app.get("/event/<int:event_id>/incidents")

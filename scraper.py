@@ -650,3 +650,7 @@ def get_event(event_id: int) -> dict:
 
 def get_event_incidents(event_id: int) -> dict:
     return fetch_api(f"/event/{event_id}/incidents")
+
+
+def get_team_last_events(team_id: int, page: int = 0) -> dict:
+    return fetch_api(f"/team/{team_id}/events/last/{page}")
