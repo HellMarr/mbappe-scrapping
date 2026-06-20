@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 from scraper import (
     ScraperError,
@@ -10,6 +11,17 @@ from scraper import (
 )
 
 app = Flask(__name__)
+CORS(
+    app,
+    resources={r"/*": {"origins": [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://kmbappe.fr",
+        "https://www.kmbappe.fr",
+        "https://kmbappe-site.web.app",
+        "https://kmbappe-site.firebaseapp.com",
+    ]}},
+)
 
 DEFAULT_PLAYER_ID = 826643
 DEFAULT_PLAYER_SLUG = "kylian-mbappe"
