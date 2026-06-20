@@ -3,6 +3,7 @@ from flask import Flask, jsonify, request
 from scraper import (
     ScraperError,
     fetch_api,
+    get_player_career,
     get_player_last_match,
     get_player_profile,
     get_player_recent_matches,
@@ -55,6 +56,12 @@ def player_recent_matches(player_id: int):
         context=_match_context(),
     )
     return jsonify({"playerId": player_id, "matches": matches, "source": "html"})
+
+
+@app.get("/player/<int:player_id>/career")
+def player_career(player_id: int):
+    limit = min(request.args.get("limit", 100, type=int), 200)
+    return jsonify(get_player_career(player_id, _player_slug(), limit=limit))
 
 
 @app.get("/proxy")
